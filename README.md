@@ -189,7 +189,7 @@ cd E:\Projects\vocal-note-pitch-tester-ws
 node tests\pitch-core.test.js
 ```
 
-预期：**30 通过，0 失败**。
+预期：**45 通过，0 失败**。
 
 覆盖内容：
 
@@ -197,8 +197,11 @@ node tests\pitch-core.test.js
 - C2–C6 十个标准音的中位误差
 - ±5 cents 偏移、滑音、振动音、谐波叠加
 - 无声、白噪声、低音量、超出范围的拒绝逻辑
-- 平滑器的倍频跳变抑制
+- 平滑器的倍频跳变抑制、八度跳变 3 帧确认
+- 八度族选峰的四种 `d'(τ)` 形态（真实周期凹陷变浅 / 真实次谐波 / 纯音 / 兜底边界）
+- 逐帧状态机的读数保持与「2 帧毛刺不写进曲线」
 - `tests/fixtures/a4.wav` 的真实 WAV 回放
+- `docs/evidence/` 现场录音回归（八度族误锁必须为 0）
 
 ### 7.2 生成标准音测试文件
 
@@ -234,19 +237,26 @@ python tools\make_test_tones.py
 9. 设置里把 A4 改成 442 Hz：A4 的目标频率应变成 442.0 Hz，音名映射随之变化。
 10. 界面中不应出现“得分 / 等级 / 命中率 / 练习报告 / 唱功评价”等字样。
 
-### 7.4 浏览器端到端冒烟（可选，不用真人真麦）
+### 7.4 浏览器端到端验证（可选，不用真人真麦）
 
-如果只想确认“采集 → AudioWorklet → YIN → 音名 → Canvas”这条链路是通的，可以让 Chrome 把 `tests\fixtures\a4.wav` 当成麦克风输入，然后运行：
+不想开麦克风，也想确认“采集 → AudioWorklet → YIN → 状态机 → Canvas”这条链路，以及同一段音频在浏览器里和 Node 里算出来是否一致，可以用无头 Chrome 跑：
 
 ```powershell
-node tests\browser-smoke.mjs
+# 1) 起本地服务（页面与素材都从它取）
+node tools\dev\devserver.js 8199
+
+# 2) 把一段 WAV 当麦克风跑页面的音频链路，导出逐帧结果（可选截图）
+node tools\dev\e2e-check.js --out .tmp\e2e-new.json --label 修复后 --seconds 22 --shot docs\img\fix-after.png
+
+# 3) 和别的版本（或 Node 复算）对比
+git show 12b8bd7:app\js\pitch-core.js > .tmp\pitch-core-baseline.js
+node tools\analyze-audio.js docs\evidence\2026-11-18-mic-recording-48k-mono.wav --core .tmp\pitch-core-baseline.js --label 修复前
+node tools\dev\compare-e2e.js
 ```
 
-预期输出 `SMOKE PASS`，界面状态为 `检测中 / A4 / 0 cents`，截图落在 `app\_shots\smoke.png`。
-
-如果启动 Chrome 时把假麦克风文件换成 `tests\fixtures\a4_quiet.wav`（−52.2 dBFS），同样应输出 `SMOKE PASS`，用来验证低声压不被默认门限挡住。
-
-完整启动命令（需要以 `--use-fake-device-for-media-stream` 等参数启动 Chrome）见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) 第 4.4 节。
+说明：无头 Chrome 自带的 `--use-file-for-fake-audio-capture` 实测出的是静音，所以 `e2e-check.js`
+自己解码 WAV 并接到 `createMediaStreamSource` 上（页面代码一行不改，worklet / 状态机 / Canvas 全是真的）。
+工具与踩坑记录见 [`docs/ISSUE_OCTAVE_JUMP.md`](docs/ISSUE_OCTAVE_JUMP.md) §11–§12。
 
 ---
 
@@ -258,20 +268,31 @@ vocal-note-pitch-tester-ws/
 │   ├── pitch-scope.html          # 页面入口与 DOM 契约
 │   ├── styles.css                # 仪表台视觉、响应式
 │   └── js/
-│       ├── pitch-core.js         # 纯计算：音名映射 + YIN + 平滑（可单独测试）
+│       ├── pitch-core.js         # 纯计算：音名映射 + YIN（八度族选峰）+ 平滑 + 状态机
 │       ├── pitch-worklet.js      # AudioWorklet：采集、组帧、调用 YIN、发消息
-│       └── app.js                # 主线程：状态机、Canvas 曲线、设置、设备
+│       └── app.js                # 主线程：Canvas 曲线、读数、设置、设备
 ├── tools/
 │   ├── serve.py                  # 只绑 127.0.0.1 的静态服务（禁缓存、自动开浏览器）
-│   └── make_test_tones.py        # 生成标准音 WAV
+│   ├── make_test_tones.py        # 生成标准音 WAV
+│   ├── analyze-audio.js          # 用项目算法逐帧复算一段 WAV（改动前后对比）
+│   └── dev/
+│       ├── devserver.js          # 开发用静态服务（另带 POST 落盘，供解码音频写文件）
+│       ├── decode-m4a.html       # 浏览器把 m4a 解码成 48 kHz 单声道 WAV
+│       ├── diag-yin.js           # 打印某一帧 d'(τ) 的局部极小（定位八度族误锁）
+│       ├── rawf0-scan.js         # 按 rawF0 口径扫「向上」的八度族错误帧（8 种取窗对齐）
+│       ├── e2e-check.js          # 无头 Chrome + 虚拟麦克风跑真实页面，导出逐帧结果
+│       └── compare-e2e.js        # 对比两份浏览器日志 / 与 Node 复算对照
 ├── tests/
-│   ├── pitch-core.test.js        # 30 项 Node 单元测试
-│   ├── browser-smoke.mjs         # Chrome 假麦克风端到端冒烟
+│   ├── pitch-core.test.js        # 45 项 Node 单元测试
 │   └── fixtures/                 # 生成的测试音 WAV
 ├── docs/
+│   ├── ISSUE_OCTAVE_JUMP.md      # 八度族跳变：现象、机制、修复记录与验证数据
+│   ├── ISSUE_OCTAVE_JUMP_CORRECTION.md  # 对原文的事实澄清（f0 / rawF0 口径、向上那一支）
 │   ├── IMPLEMENTATION_PLAN.md    # 实现计划、模块划分、假设与验收映射
 │   ├── TEST_REPORT.md            # 实际测试结果与人工验收清单
-│   └── ROADMAP.md                # 开源调研、Windows/Android 迭代路线
+│   ├── ROADMAP.md                # 开源调研、Windows/Android 迭代路线
+│   ├── evidence/                 # 现场录音（m4a 原件 + 解码后的 48 kHz WAV）
+│   └── img/                      # 现象截图与验证截图
 ├── start.bat                     # Windows 双击启动
 ├── start.ps1                     # PowerShell 启动
 └── README.md
@@ -287,13 +308,16 @@ vocal-note-pitch-tester-ws/
 麦克风 / 系统声音
   → AudioWorklet (pitch-worklet.js)   独立音频线程
       环形缓冲 4096 samples，每 1024 samples 分析一次
-      → PitchCore.createAnalyzer().analyze()
+      → PitchCore.createAnalyzer().analyze()      （YIN + 八度族选峰）
       → postMessage { t, f0, rawF0, aperiodicity, confidence, rms, db, ... }
   → 主线程 app.js
-      状态机 + 平滑器
+      → PitchCore.PitchTracker.track()   （门限判定 + 平滑 + 八度跳变确认 + 读数保持）
       → 音名 / 八度 / 音分 / 电平读数
       → Canvas 时间–音高曲线
 ```
+
+判定逻辑全在 `PitchTracker` 里（纯计算），所以可以用真实录音在 Node 里逐帧回归，
+不必每次都开浏览器；`app.js` 只负责把结果画出来。
 
 ### 9.2 关键参数
 
@@ -302,11 +326,15 @@ vocal-note-pitch-tester-ws/
 | 分析窗口 | 4096 samples | 48 kHz 下约 85.3 ms |
 | 跳帧 | 1024 samples | 约 21.3 ms 更新一次 |
 | 采样率 | 设备默认 | 通常 48 kHz |
-| YIN 阈值 | 0.15 | 低于它的第一个局部极小 |
+| YIN 阈值 | 0.15 | 「干净凹陷」的绝对阈值 |
+| 八度族归一容差 | 0.10 | 更短周期的凹陷只要不比已选凹陷深 0.10 以上，就判为同一周期族 |
+| 八度族归一深度上限 | 0.30 | 整帧最深凹陷比它还浅才做归一（避免噪声帧被越拉越短） |
 | 最大 Aperiodicity | 0.5 | worklet 内部硬上限 |
 | 默认音域 | MIDI 36–84 | C2–C6，65.4–1046.5 Hz |
 | 默认门限 | −60 dBFS | 低于它判为信号不足；可在 −70…−20 之间调 |
 | 默认置信度 | 75% | 对应 Aperiodicity ≤ 0.25 |
+| 跳变确认 | 2 帧 / 八度族 3 帧 | 八度族误判常只持续 1–2 帧；真实八度跳唱第 3 帧（≈64 ms）跟上 |
+| 读数保持 | 150 ms | 单帧低置信度不清空平滑历史、读数不闪成 `—` |
 
 ### 9.3 为什么用 AudioWorklet
 
@@ -323,14 +351,32 @@ f_target  = A4 * 2^((midi - 69) / 12)
 
 音名使用升号拼写（`C#4`、`F#4`…）；八度按 MIDI 惯例 `floor(midi/12) - 1`。
 
-### 9.5 置信度与断线
+### 9.5 选峰为什么不是「第一个低于阈值」
+
+经典 YIN 取 `[tauMin, tauMax]` 里第一个 `d'(τ) < 0.15` 的局部极小。真实人声在换字、
+气声、尾音处基频凹陷会变浅（`d'(T) > 0.15`），而 `2T`、`3T` 处的凹陷反而更深，
+规则就会整帧落到低一个 / 两个八度上——这正是 2026-11-18 记录的「八度族跳变」。
+
+现在的规则（`YinAnalyzer._pickTau`，见 [`docs/ISSUE_OCTAVE_JUMP.md`](docs/ISSUE_OCTAVE_JUMP.md) §11）：
+
+1. 先按经典规则取最短的「干净凹陷」（`d' ≤ 0.15`）——纯音、干净乐音行为不变；
+2. 再沿倍数链 `τ/2`、`τ/3`、`τ/4` 往下归一：如果更短周期处也有凹陷，且不比已选的深
+   0.10 以上（说明两处属于同一周期族），就换成更短的那个；
+3. 真正含次谐波（气泡音 / 低八度伴唱）时，`2T` 的凹陷会远深于 `T`（例如 0.01 对 0.28），
+   差距超过容差，因此不会被误改高；
+4. 完全找不到可信凹陷时，如果解落在搜索下限附近（旧版会固定输出 63.49 Hz），直接判无效。
+
+### 9.6 置信度、断线与读数保持
 
 每一帧算出的 `confidence = 1 - aperiodicity`。低于设置门限时：
 
-- 不写 `state.current`，读数回到 `—`
 - 不往 `history` 里写点
 - Canvas 折线在时间间隔 > 0.22 s 时自动断开
 - 状态显示“低置信度”，而不是硬画一个错误音高
+
+但**单帧**低置信度不再立刻清空（旧版会 `reset()` 平滑器，而 reset 后的第一帧会被无条件
+接受，正好把一次八度误判画成尖峰）：读数保持 150 ms，超过才清空。低置信度期间曲线不新增
+点，所以不会画出错误台阶。
 
 ---
 

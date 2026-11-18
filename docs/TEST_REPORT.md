@@ -9,7 +9,7 @@
 
 | 层 | 结果 |
 | --- | --- |
-| 核心算法单元测试 | **30 / 30 通过，0 失败** |
+| 核心算法单元测试 | **45 / 45 通过，0 失败**（2026-11-18 八度族修复后；原 30 项未改动） |
 | WAV 回放用例 | **通过**（`fixtures/a4.wav` → A4） |
 | JavaScript 语法检查 | `pitch-core.js` / `pitch-worklet.js` / `app.js` 全部通过 |
 | 页面静态加载 | **0 控制台错误 / 0 警告 / 0 资源错误 / 0 横向溢出** |
@@ -41,7 +41,7 @@ node tests\pitch-core.test.js
 ### 2.2 结果
 
 ```
-结果：30 通过，0 失败
+结果：45 通过，0 失败
 ```
 
 ### 2.3 标准音精度（中位误差）
@@ -185,6 +185,11 @@ node --check tests\browser-smoke.mjs
 
 `tests/browser-smoke.mjs` 通过 Chrome DevTools Protocol 自动点击“开始检测”，读取界面状态并截图。Chrome 用 `a4.wav` 冒充麦克风，因此这条链路不依赖真人、真麦。
 
+> **2026-11-18 更新**：`tests/browser-smoke.mjs` 已不在仓库里（本节记录的是当次运行结果）。
+> 现在做同类验证请用 `tools/dev/e2e-check.js` + `tools/dev/compare-e2e.js`（见第 8 节）。
+> 另外注意：无头 Chrome 的 `--use-file-for-fake-audio-capture` 实测出的是静音，
+> 新工具改为在页面内解码 WAV 并接到 `createMediaStreamSource` 上。
+
 终端 A：
 
 ```powershell
@@ -318,4 +323,84 @@ python tools\serve.py
 
 # 4. 打开页面
 # http://127.0.0.1:8123/pitch-scope.html
+```
+
+---
+
+## 8. 八度族跳变修复验证（2026-11-18 追加）
+
+问题与机制见 [`docs/ISSUE_OCTAVE_JUMP.md`](ISSUE_OCTAVE_JUMP.md)。这一节只记验证数据。
+
+### 8.1 单元测试
+
+```
+结果：45 通过，0 失败
+```
+
+原有 30 项全部保留且未改动，C2–C6 音分误差仍为 0.00–0.01（未劣化）。新增 15 项：
+
+| 用例 | 断言 |
+| --- | --- |
+| 真实周期凹陷变浅、2T 更深 | 取 τ=90（0.223）而不是 τ=181（0.140） |
+| 真实次谐波（2T 远深于 T） | 保留 2T，不被误改高 |
+| 干净纯音的 kT 凹陷 | 取最短周期，不因数值误差落到 3T/5T |
+| 兜底分支贴近搜索下限 | 判为无效，不再输出 63.49 Hz |
+| 周期倍增合成信号 | 正确读成低八度 |
+| 八度跳变 3 帧确认 | 2 帧毛刺被挡住；第 3 帧（≈64 ms）接受 |
+| 非八度大跳变（+7 半音） | 2 帧内跟上，不被八度规则拖慢 |
+| 单帧低置信度 | 状态保持「检测中」、读数保持、不新增曲线点 |
+| 低置信度持续 >150 ms | 清空读数并切到「低置信度」 |
+| 状态机 2 帧毛刺 | 曲线上不出现 G5 |
+| 真实八度跳唱 | 100 ms 内画出新音 |
+| 设置变化 | 音域收窄后 C2 判为超出范围 |
+| 现场录音回归 | `docs/evidence/…-48k-mono.wav` 上八度族误锁为 0 |
+
+### 8.2 逐帧复算（同一段 20.75 s 现场录音，页面默认搜索范围 64.1–1067.4 Hz）
+
+| 指标 | 修复前 `12b8bd7` | 修复后 |
+| --- | --- | --- |
+| 曲线点（aper ≤ 0.25） | 483 | 483 |
+| 八度族跳变帧 | 3（−14.7 / −12.3 / −11.8 半音） | 0 |
+| 大跳变帧（≥5 半音） | 3 | 0 |
+| 曲线断段 | 8 | 8 |
+| 搜索下限读数帧 | 0 | 0 |
+
+### 8.3 浏览器端到端（无头 Chrome + 虚拟麦克风，真实页面）
+
+| 指标 | 修复前页面 | 修复后页面 |
+| --- | --- | --- |
+| 采集帧数（22 s） | 1020 | 1031 |
+| 曲线点 / 断段 | 501 / 9 | 501 / 9 |
+| 八度族跳变帧 | 3（3.285 s、7.595 s、18.219 s） | 0 |
+| 页面异常 / 控制台错误 | 0 | 0 |
+| 与 Node 复算逐帧差 | — | 对齐 483 帧，平均 / 最大均为 0.00 音分 |
+
+### 8.4 状态机层面的改善（同一段录音逐帧回放）
+
+| 指标 | 修复前状态机 | 修复后状态机 |
+| --- | --- | --- |
+| 非检测状态切换 | 27 次 | 9 次 |
+| 累计「读数为空」时长 | 8085 ms | 5952 ms |
+| 读数保持帧 | 0 | 107 |
+
+### 8.5 性能
+
+969 帧、48 kHz：修复前 0.614 ms/帧，修复后 0.588 ms/帧；跳帧预算 21.3 ms，无退化。
+
+### 8.6 仍未覆盖
+
+- 现场录音里「气口底噪被读成 A2/A3」的旧问题仍在（与本次八度族修复无关，见
+  `ISSUE_OCTAVE_JUMP.md` §11.5）；需要时按 §9.2 的方式在连续 128 采样块上做前置滤波。
+- 真实麦克风 / 真实系统声音共享仍属人工验收项。
+
+### 8.7 复现
+
+```powershell
+node tools\dev\devserver.js 8199
+git show 12b8bd7:app\js\pitch-core.js > .tmp\pitch-core-baseline.js
+node tools\analyze-audio.js docs\evidence\2026-11-18-mic-recording-48k-mono.wav --core .tmp\pitch-core-baseline.js --label 修复前 --tracker old
+node tools\analyze-audio.js docs\evidence\2026-11-18-mic-recording-48k-mono.wav --label 修复后 --tracker new
+node tools\dev\e2e-check.js --out .tmp\e2e-new.json --label 修复后 --seconds 22 --shot docs\img\fix-after.png
+node tools\dev\compare-e2e.js
+node tests\pitch-core.test.js
 ```

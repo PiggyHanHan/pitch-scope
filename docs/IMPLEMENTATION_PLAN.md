@@ -125,7 +125,7 @@ vocal-note-pitch-tester-ws/
 | 样式 | `app/styles.css` | 仪表台视觉、深浅层级、响应式、reduced-motion | 不承载业务逻辑 | 桌面 / 移动截图 |
 | 本地服务 | `tools/serve.py` | 只绑 127.0.0.1、禁缓存、正确 MIME、端口回退、自动开浏览器 | 不处理音频、不做 API | `Invoke-WebRequest` / 浏览器 |
 | 测试音生成 | `tools/make_test_tones.py` | 生成 48 kHz / 单声道 / 16-bit 标准音、静音、噪声 | 不做检测 | 直接运行，检查 WAV 头与频率 |
-| 单元测试 | `tests/pitch-core.test.js` | 30 项断言：映射、精度、边界、平滑、WAV 回放 | 不测 UI | `node tests/pitch-core.test.js` |
+| 单元测试 | `tests/pitch-core.test.js` | 45 项断言：映射、精度、边界、平滑、八度族选峰、状态机、WAV 回放、现场录音回归 | 不测 UI | `node tests/pitch-core.test.js` |
 | 启动器 | `start.bat` / `start.ps1` | 找 Python → 调 `serve.py` | 不安装依赖 | `--help` + 实跑 |
 
 ## 7. 关键算法决策

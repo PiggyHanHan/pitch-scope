@@ -11,7 +11,7 @@
 ## 1. 结论摘要
 
 1. **Windows 先做，且先用 Electron 套壳。** 现有 `app/` 的 HTML/JS/Canvas 可以 100% 复用；系统声音用 Electron 官方的 `setDisplayMediaRequestHandler` + `audio: 'loopback'`，不再弹“共享整个屏幕 + 勾选分享音频”的选择器。这是当前改造成本最低、风险最小的路径。
-2. **音高核心暂时不换。** 现有 YIN 在 C2–C6 标准音上中位误差 0.00 cents，30/30 单测通过；真正影响体验的是低声门限、系统音频采集和状态提示，不是算法精度。pYIN / CREPE 放到“可选高精度模式”或离线基准，不作为默认运行时。
+2. **音高核心暂时不换。** 现有 YIN 在 C2–C6 标准音上中位误差 0.00 cents，43/43 单测通过；真正影响体验的是低声门限、系统音频采集和状态提示，不是算法精度。pYIN / CREPE 放到“可选高精度模式”或离线基准，不作为默认运行时。
 3. **安卓端现在只做技术储备，不写代码。** 等 Windows 客户端稳定并收到明确指令后，先做 3 天技术选型 Spike（Tauri 2 / Capacitor / Flutter），再决定。安卓系统音频受 `AudioPlaybackCapture` + `MediaProjection` 限制，只能作为“实验性功能”，不能承诺所有游戏/视频都能采。
 4. **开源依赖要避坑。** `pitchfinder`、TarsosDSP、aubio 都是 GPL；`pitchy`、`sevagh/pitch-detection`、CREPE 是 MIT。若本项目未来要闭源分发，不要把 GPL 库直接链进安装包；若整体开源并采用 GPL 兼容许可证，则另说。
 5. **项目已纳入 Git。** 从本次提交开始，后续每个阶段用独立分支/提交推进；`_shots/`、`__pycache__` 等过程产物不进仓库。
@@ -140,7 +140,7 @@
 ### P0 · 浏览器原型（已完成）
 
 - Web Audio + AudioWorklet + Canvas 2D；YIN + 十二平均律映射；目标音参考线；状态机；设置持久化。
-- 30/30 算法单测；A4 假麦克风冒烟；静音负向；低声 A4（−52.2 dBFS）通过；系统声音来源 UI 通过。
+- 43/43 算法单测；A4 假麦克风冒烟；静音负向；低声 A4（−52.2 dBFS）通过；系统声音来源 UI 通过。
 - 产物：`app/`、`tests/`、`tools/`、`README.md`、`docs/IMPLEMENTATION_PLAN.md`、`docs/TEST_REPORT.md`。
 
 ### P1 · Windows 桌面 MVP（下一阶段，约 5–8 个工作日）
