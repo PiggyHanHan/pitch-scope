@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>音准可视化 · Pitch Scope</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1112'/%3E%3Cpath d='M5 19h4l2.5-7 4.5 13 3.5-9 2 5h4' fill='none' stroke='%23d7b26c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+
+    <!-- ===== 顶栏 ===== -->
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-opacity=".4"></rect>
+          <path d="M5 19h4l2.5-7 4.5 13 3.5-9 2 5h4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        <div class="brand-text">
+          <h1>音准可视化</h1>
+          <p>单音人声 · 十二平均律 · 本地处理</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="chip-btn" id="a4Chip" type="button" title="修改 A4 参考频率">A4 = 440.0 Hz</button>
+        <button class="icon-btn" id="btnSettings" type="button" aria-label="打开设置" title="设置">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.2 5.2l1.7 1.7M17.1 17.1l1.7 1.7M18.8 5.2l-1.7 1.7M6.9 17.1l-1.7 1.7"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ===== 提示条 ===== -->
+    <div class="notice" id="notice" hidden>
+      <span id="noticeText"></span>
+      <button class="notice-close" id="noticeClose" type="button" aria-label="关闭提示">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+
+    <!-- ===== 主控制台 ===== -->
+    <main class="console">
+
+      <!-- 左列：读数 -->
+      <section class="readout panel" id="readout" data-status="idle" aria-label="当前音高读数">
+        <div class="readout-head">
+          <span class="panel-label">当前音高</span>
+          <span class="status" id="statusChip">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-text" id="statusText">未启动</span>
+            <span class="status-extra" id="statusExtra"></span>
+          </span>
+        </div>
+
+        <div class="note-well">
+          <div class="note-line is-empty" id="noteDisplay">
+            <span class="note-letter" id="noteLetter">—</span>
+            <span class="note-octave" id="noteOctave"></span>
+          </div>
+          <p class="note-sub" id="noteSub">点击“开始检测”</p>
+        </div>
+
+        <div class="cents-block">
+          <div class="cents-row">
+            <span class="cents-value" id="centsValue">—</span>
+            <span class="cents-unit">cents</span>
+            <span class="cents-word" id="centsCaption">相对最近音名</span>
+          </div>
+          <div class="cents-track" id="centsTrack" aria-hidden="true">
+            <div class="cents-band"></div>
+            <div class="cents-fill" id="centsFill"></div>
+            <div class="cents-center"></div>
+            <div class="cents-needle" id="centsNeedle"></div>
+          </div>
+          <div class="cents-scale">
+            <span>偏低 −50</span>
+            <span>准</span>
+            <span>+50 偏高</span>
+          </div>
+        </div>
+
+        <div class="meter-block">
+          <div class="meter-head">
+            <span>输入电平</span>
+            <span class="mono" id="levelDb">—</span>
+          </div>
+          <div class="level-track" id="levelTrack">
+            <div class="level-fill" id="levelFill"></div>
+            <div class="level-peak" id="levelPeak"></div>
+            <div class="level-gate" id="levelGate"></div>
+          </div>
+          <div class="meter-foot">
+            <span>−70</span>
+            <span id="levelGateText">门限 −60 dB</span>
+            <span>0 dBFS</span>
+          </div>
+        </div>
+
+        <div class="freq-grid">
+          <div class="freq-item">
+            <span>检测频率</span>
+            <strong class="mono" id="freqValue">—</strong>
+          </div>
+          <div class="freq-item">
+            <span>最近音名频率</span>
+            <strong class="mono" id="noteFreqValue">—</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右列：即时音高曲线 -->
+      <section class="scope panel" aria-label="即时音高曲线">
+        <header class="scope-head">
+          <div class="scope-title">
+            <h2>即时音高</h2>
+            <p id="scopeSub">时间–音高曲线 · 15 秒窗口</p>
+          </div>
+          <div class="legend">
+            <span><i class="swatch swatch-curve"></i>音高</span>
+            <span><i class="swatch swatch-target"></i>目标音</span>
+          </div>
+        </header>
+
+        <div class="chart-wrap" id="chartWrap">
+          <canvas id="pitchChart" role="img" aria-label="即时音高曲线，横轴为时间，纵轴为 CDEFGAB 音名"></canvas>
+          <div class="chart-empty" id="chartEmpty">点击“开始检测”，这里会实时绘制音高曲线</div>
+        </div>
+
+        <div class="scope-foot">
+          <span id="chartHint">纵轴：CDEFGAB 音名 · 横轴：最近 15 秒</span>
+          <span class="mono" id="chartStats">有效点 0</span>
+        </div>
+
+        <details class="debug-panel" id="debugPanel" hidden>
+          <summary>调试信息</summary>
+          <dl class="debug-grid">
+            <div><dt>采样率</dt><dd class="mono" id="dbgSr">—</dd></div>
+            <div><dt>分析窗口</dt><dd class="mono" id="dbgWindow">—</dd></div>
+            <div><dt>跳帧</dt><dd class="mono" id="dbgHop">—</dd></div>
+            <div><dt>原始基频</dt><dd class="mono" id="dbgF0">—</dd></div>
+            <div><dt>Aperiodicity</dt><dd class="mono" id="dbgAper">—</dd></div>
+            <div><dt>置信度</dt><dd class="mono" id="dbgConf">—</dd></div>
+            <div><dt>RMS</dt><dd class="mono" id="dbgRms">—</dd></div>
+            <div><dt>削波比例</dt><dd class="mono" id="dbgClip">—</dd></div>
+            <div><dt>消息速率</dt><dd class="mono" id="dbgRate">—</dd></div>
+            <div><dt>音频时钟</dt><dd class="mono" id="dbgClock">—</dd></div>
+          </dl>
+        </details>
+      </section>
+    </main>
+
+    <!-- ===== 底部控制条 ===== -->
+    <section class="controlbar panel">
+      <div class="transport">
+        <button class="btn btn-primary" id="btnStart" type="button" data-running="false" aria-label="开始检测">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="2.5" width="6" height="11" rx="3"></rect>
+            <path d="M5.5 11a6.5 6.5 0 0 0 13 0"></path>
+            <path d="M12 17.5V21M8.5 21h7"></path>
+          </svg>
+          <span id="btnStartLabel">开始检测</span>
+        </button>
+        <div class="device-field">
+          <label for="sourceSelect">音频来源</label>
+          <select id="sourceSelect" aria-label="选择音频来源">
+            <option value="mic">麦克风</option>
+            <option value="system">系统声音</option>
+          </select>
+        </div>
+        <div class="device-field">
+          <label for="deviceSelect">输入设备</label>
+          <select id="deviceSelect" aria-label="选择输入设备">
+            <option value="">默认输入设备</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="target-field">
+        <span class="field-label" id="targetLabel">目标音</span>
+        <div class="target-list" id="targetButtons" role="group" aria-labelledby="targetLabel"></div>
+        <button class="btn btn-quiet" id="btnPlayTarget" type="button" title="播放 1.2 秒参考音，麦克风会拾取到它">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4z"></path>
+            <path d="M17 8.5a5 5 0 0 1 0 7"></path>
+          </svg>
+          试听
+        </button>
+      </div>
+
+      <div class="control-meta">
+        <span id="rangeLabel">音域 C2–C6</span>
+        <span id="latencyLabel">延迟约 90 ms</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== 设置面板 ===== -->
+  <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
+    <header class="dialog-head">
+      <div>
+        <h2 id="settingsTitle">设置</h2>
+        <p>修改后立即生效，并保存在本机浏览器</p>
+      </div>
+      <button class="icon-btn" id="btnCloseSettings" type="button" aria-label="关闭设置">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </header>
+
+    <div class="dialog-body">
+      <div class="setting">
+        <div class="setting-label">
+          <label for="inputA4">A4 参考频率</label>
+          <small>默认 440 Hz，用于十二平均律映射</small>
+        </div>
+        <div class="setting-control a4-control">
+          <input type="number" id="inputA4" min="415" max="466" step="0.1" value="440" inputmode="decimal">
+          <span class="unit">Hz</span>
+        </div>
+        <div class="a4-presets" id="a4Presets">
+          <button type="button" data-a4="440">440</button>
+          <button type="button" data-a4="442">442</button>
+          <button type="button" data-a4="432">432</button>
+          <button type="button" data-a4="415">415</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label>检测音域</label>
+          <small>超出音域的音不显示音名</small>
+        </div>
+        <div class="setting-control range-control">
+          <select id="selectLow" aria-label="音域下限"></select>
+          <span class="unit">至</span>
+          <select id="selectHigh" aria-label="音域上限"></select>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label for="inputGate">输入门限</label>
+          <small>低于此电平显示“信号不足”；低声唱歌可调到 −60～−70 dB</small>
+        </div>
+        <div class="setting-control slider-control">
+          <input type="range" id="inputGate" min="-70" max="-20" step="1" value="-60">
+          <span class="mono value" id="gateValue">−60 dB</span>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label for="inputConfidence">置信度门限</label>
+          <small>低于此值视为音高不稳定，曲线断开</small>
+        </div>
+        <div class="setting-control slider-control">
+          <input type="range" id="inputConfidence" min="50" max="95" step="1" value="75">
+          <span class="mono value" id="confidenceValue">75%</span>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label for="selectSmoothing">平滑</label>
+          <small>抑制跳变，越高越稳但延迟略增</small>
+        </div>
+        <div class="setting-control">
+          <select id="selectSmoothing">
+            <option value="off">关闭</option>
+            <option value="light">轻（推荐）</option>
+            <option value="medium">中</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label for="selectWindow">曲线时间窗</label>
+          <small>横轴显示最近多少秒</small>
+        </div>
+        <div class="setting-control">
+          <select id="selectWindow">
+            <option value="10">10 秒</option>
+            <option value="15">15 秒</option>
+            <option value="30">30 秒</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">
+          <label for="checkboxDebug">调试信息</label>
+          <small>显示基频、Aperiodicity、削波等技术指标</small>
+        </div>
+        <div class="setting-control">
+          <label class="switch">
+            <input type="checkbox" id="checkboxDebug">
+            <span>显示</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <footer class="dialog-foot">
+      <button class="btn btn-quiet" id="btnRestore" type="button">恢复默认</button>
+      <button class="btn btn-primary" id="btnDoneSettings" type="button">完成</button>
+    </footer>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <div class="noscript">此页面需要 JavaScript 才能采集麦克风并绘制曲线。</div>
+  </noscript>
+
+  <script src="js/pitch-core.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

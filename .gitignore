@@ -1,0 +1,31 @@
+# 过程产物（截图、浏览器临时文件）
+app/_shots/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 日志与临时文件
+*.log
+*.tmp
+~$*
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地环境变量
+.env
+.env.*
+
+# 桌面端构建输出（P1 之后使用）
+desktop/dist/
+desktop/out/
+desktop/release/
