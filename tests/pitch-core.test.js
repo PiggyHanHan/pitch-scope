@@ -357,9 +357,226 @@ test("平滑配置可关闭", () => {
   approx(smoother.push(441.5, 0), 441.5, 0.001, "关闭平滑时直通");
 });
 
-/* ================= 5. WAV 测试样例（可选） ================= */
+test("八度跳变需要 3 帧确认，2 帧的毛刺不改变读数", () => {
+  const smoother = new PC.PitchSmoother({ medianSize: 1, tauMs: 0 });
+  const g4 = PC.midiToFreq(67, 440);
+  const g5 = PC.midiToFreq(79, 440);
 
-console.log("\n[5] 测试音 WAV 回放验证");
+  // 稳态 G4
+  let t = 0;
+  let out = null;
+  for (let i = 0; i < 5; i++) {
+    out = smoother.push(g4, (t += 21));
+    approx(out, g4, 0.5, "稳态");
+  }
+
+  // 2 帧跳到 G5：不应被接受
+  smoother.push(g5, (t += 21));
+  out = smoother.push(g5, (t += 21));
+  approx(out, g4, 0.5, "2 帧的八度毛刺应被挡住");
+
+  // 持续到第 3 帧才接受（≈64 ms，满足 100 ms 内跟上）
+  out = smoother.push(g5, (t += 21));
+  approx(out, g5, 0.5, "第 3 帧应接受真实的八度跳唱");
+});
+
+test("非八度的普通大跳变仍然 2 帧即接受", () => {
+  const smoother = new PC.PitchSmoother({ medianSize: 1, tauMs: 0 });
+  const a3 = PC.midiToFreq(57, 440);
+  const e4 = PC.midiToFreq(64, 440); // +7 半音（纯五度），不是整八度
+  let t = 0;
+  for (let i = 0; i < 3; i++) smoother.push(a3, (t += 21));
+  smoother.push(e4, (t += 21));
+  const out = smoother.push(e4, (t += 21));
+  approx(out, e4, 0.5, "7 半音的跳进应在 2 帧内跟上");
+});
+
+/* ================= 5. 八度族选峰（本次修复） ================= */
+
+console.log("\n[5] 八度族选峰规则");
+
+/** 直接给 _pickTau 喂一个 d'(τ) 曲线：dips = {tau: value}，其余为接近 1 的平台。 */
+function pickFromDips(dips, tauMax) {
+  const max = tauMax || 400;
+  const dn = new Float32Array(max + 2).fill(0.98);
+  Object.keys(dips).forEach((tau) => { dn[Number(tau)] = dips[tau]; });
+  // 让每个凹陷成为局部极小：相邻 lag 给一个略高的值
+  Object.keys(dips).forEach((tau) => {
+    const t = Number(tau);
+    if (t - 1 > 0 && !(t - 1 in dips)) dn[t - 1] = Math.min(dips[tau] + 0.25, 0.99);
+    if (t + 1 <= max && !(t + 1 in dips)) dn[t + 1] = Math.min(dips[tau] + 0.25, 0.99);
+  });
+  const analyzer = PC.createAnalyzer({ minFreq: 60, maxFreq: 1250, decimation: 2 });
+  return analyzer._pickTau(dn, 8, max);
+}
+
+test("真实周期凹陷变浅、2T 更深时，不落到低八度", () => {
+  // 取自现场录音 3.413 s 的实测值：τ(真实) = 90 → d' = 0.223，τ(2T) = 181 → d' = 0.140
+  const picked = pickFromDips({ 90: 0.223, 181: 0.140, 272: 0.309, 364: 0.338 });
+  assert(picked.ok, "应给出结果");
+  assert(picked.tau === 90, `应选 90，实际 ${picked.tau}`);
+  approx(picked.aperiodicity, 0.223, 0.001, "aperiodicity 应为真实周期处的值");
+});
+
+test("真实次谐波（2T 远深于 T）不被误改高", () => {
+  // 气泡音 / 低八度伴唱：信号真的是 2T 周期，T 只是「半个周期」
+  const picked = pickFromDips({ 90: 0.28, 181: 0.01 });
+  assert(picked.ok, "应给出结果");
+  assert(picked.tau === 181, `应保留 2T（181），实际 ${picked.tau}`);
+});
+
+test("干净的纯音仍取最短周期，不落到 kT 上", () => {
+  // 纯正弦的各个 kT 凹陷几乎一样深，不能因为数值误差落到 3T / 5T
+  const picked = pickFromDips({ 23: 0.0002, 46: 0.0007, 69: 0.0015, 92: 0.0026 });
+  assert(picked.ok, "应给出结果");
+  assert(picked.tau === 23, `应选最短周期 23，实际 ${picked.tau}`);
+});
+
+test("兜底分支不输出贴着搜索下限的读数（旧版的 B1/C2）", () => {
+  const analyzer = PC.createAnalyzer({ minFreq: 60, maxFreq: 1250, decimation: 2 });
+  const tauMax = 400;
+  // 单调下降、没有任何局部极小：与「窗内没有真实周期」时的退化情况一致，
+  // 全局最小落在搜索下限（tauMax）附近。
+  const dn = new Float32Array(tauMax + 2);
+  for (let t = 0; t <= tauMax + 1; t++) dn[t] = 0.99 - t * 0.0001;
+  const picked = analyzer._pickTau(dn, 8, tauMax);
+  assert(!picked.ok, "落在搜索下限的退化解应判为无效");
+});
+
+test("整帧都不周期时判为无可信周期，不编造读数", () => {
+  // 所有凹陷都 ≥0.4（气口 / 换字跨界）：不管选哪个 lag 都是乱数，
+  // 应该判为无可信周期（rawF0 = 0），而不是输出 63 Hz 或某个高音。
+  const picked = pickFromDips({ 90: 0.42, 181: 0.44, 272: 0.46 });
+  assert(!picked.ok, "不可信的帧应判为无可信周期");
+});
+
+test("气口帧在 analyze() 里返回 rawF0 = 0", () => {
+  // 白噪声帧的 aperiodicity 通常 > 0.4
+  let seed = 20261119;
+  const n = SAMPLE_RATE;
+  const noise = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    noise[i] = ((seed / 0x7fffffff) * 2 - 1) * 0.2;
+  }
+  const frames = analyzeSignal(noise);
+  const fabricated = frames.filter((f) => f.rawF0 > 0 && f.aperiodicity > 0.45);
+  assert(fabricated.length === 0,
+    `不可信帧仍输出了 rawF0：${fabricated.length} 帧`);
+});
+
+test("周期倍增的合成信号被正确读成低八度", () => {
+  // 相邻周期幅度交替（周期倍增）：真实周期是 2T，读数应是 f0/2
+  const f0 = PC.midiToFreq(64, 440);
+  const seconds = 1.6;
+  const n = Math.round(SAMPLE_RATE * seconds);
+  const signal = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SAMPLE_RATE;
+    const period = Math.floor(t * f0);
+    const amp = period % 2 === 0 ? 1.35 : 0.65;
+    signal[i] = 0.22 * amp * Math.sin(2 * Math.PI * f0 * t);
+  }
+  const frames = analyzeSignal(signal).filter((f) => f.valid);
+  assert(frames.length > frames.length * 0.5, "有效帧过少");
+  const med = median(frames.map((f) => f.f0));
+  approx(med, f0 / 2, f0 * 0.01, "应读成低八度");
+});
+
+/* ================= 6. 逐帧状态机（读数保持） ================= */
+
+console.log("\n[6] 状态机与读数保持");
+
+function messageFor(f0, t, overrides) {
+  return Object.assign({
+    t,
+    tEnd: t + 0.0427,
+    f0,
+    rawF0: f0,
+    aperiodicity: 0.05,
+    confidence: 0.95,
+    db: -18,
+    clipRatio: 0
+  }, overrides || {});
+}
+
+test("单帧低置信度不清空曲线、读数保持", () => {
+  const tracker = new PC.createTracker({ holdMs: 150 });
+  const e4 = PC.midiToFreq(64, 440);
+  let t = 0;
+  for (let i = 0; i < 6; i++) tracker.track(messageFor(e4, (t += 0.021)));
+  const before = tracker.current.label;
+
+  const held = tracker.track(messageFor(e4, (t += 0.021), { aperiodicity: 0.9, confidence: 0.1 }));
+  assert(held.status === "detecting", "单帧低置信度应保持检测中，实际 " + held.status);
+  assert(held.held === true, "应标记为读数保持");
+  assert(held.point === null, "保持期间不应新增曲线点");
+  assert(tracker.current && tracker.current.label === before, "读数应保持");
+});
+
+test("低置信度持续超过 150 ms 才清空", () => {
+  const tracker = new PC.createTracker({ holdMs: 150 });
+  const e4 = PC.midiToFreq(64, 440);
+  let t = 0;
+  for (let i = 0; i < 6; i++) tracker.track(messageFor(e4, (t += 0.021)));
+  for (let i = 0; i < 10; i++) {
+    const out = tracker.track(messageFor(e4, (t += 0.021), { aperiodicity: 0.9, confidence: 0.1 }));
+    if (!out.held) {
+      assert(out.status === "low-confidence", "失持后状态应为 low-confidence");
+      assert(out.current === null, "失持后读数应清空");
+      return;
+    }
+  }
+  throw new Error("低置信度 210 ms 后仍未清空读数");
+});
+
+test("2 帧的八度毛刺不会被写进曲线", () => {
+  const tracker = new PC.createTracker();
+  const g4 = PC.midiToFreq(67, 440);
+  const g5 = PC.midiToFreq(79, 440);
+  let t = 0;
+  const points = [];
+  for (let i = 0; i < 6; i++) points.push(tracker.track(messageFor(g4, (t += 0.021))).point);
+  points.push(tracker.track(messageFor(g5, (t += 0.021))).point);
+  points.push(tracker.track(messageFor(g5, (t += 0.021))).point);
+  for (let i = 0; i < 4; i++) points.push(tracker.track(messageFor(g4, (t += 0.021))).point);
+
+  const midis = points.filter(Boolean).map((p) => p.midi);
+  assert(midis.every((m) => m < 67.5), "曲线上不应出现 G5：" + midis.map((m) => m.toFixed(1)).join(","));
+});
+
+test("真实的八度跳唱在 100 ms 内画出新音", () => {
+  const tracker = new PC.createTracker();
+  const g4 = PC.midiToFreq(67, 440);
+  const g5 = PC.midiToFreq(79, 440);
+  let t = 0;
+  for (let i = 0; i < 6; i++) tracker.track(messageFor(g4, (t += 0.021)));
+  const start = t;
+  let reached = null;
+  for (let i = 0; i < 8; i++) {
+    const out = tracker.track(messageFor(g5, (t += 0.021)));
+    if (out.current && out.current.midiFloat > 78.5 && reached === null) reached = t;
+  }
+  assert(reached !== null, "跳到 G5 后没有画出新音");
+  assert((reached - start) * 1000 <= 100, `跟上耗时应 ≤100 ms，实际 ${((reached - start) * 1000).toFixed(0)} ms`);
+});
+
+test("设置变化后状态机按新音域判定", () => {
+  const tracker = new PC.createTracker({ minMidi: 36, maxMidi: 84 });
+  const c2 = PC.midiToFreq(36, 440);
+  let t = 0;
+  const inside = tracker.track(messageFor(c2, (t += 0.021)));
+  assert(inside.status === "detecting", "C2 在 C2–C6 内应为检测中，实际 " + inside.status);
+  approx(inside.current.midiFloat, 36, 0.3, "C2 音高");
+
+  tracker.configure({ minMidi: 60, maxMidi: 72 });
+  const out = tracker.track(messageFor(c2, (t += 0.021)));
+  assert(out.status === "out-of-range", "音域收窄后 C2 应为超出范围，实际 " + out.status);
+});
+
+/* ================= 7. WAV 测试样例（可选） ================= */
+
+console.log("\n[7] 测试音 WAV 回放验证");
 
 const wavPath = path.join(__dirname, "fixtures", "a4.wav");
 if (fs.existsSync(wavPath)) {
@@ -401,6 +618,31 @@ if (fs.existsSync(wavPath)) {
   });
 } else {
   console.log("  SKIP  fixtures/a4.wav 不存在（先运行 tools/make_test_tones.py）");
+}
+
+/* ================= 8. 现场录音回归（可选） ================= */
+
+console.log("\n[8] 现场录音回归（docs/evidence/2026-11-18-mic-recording-48k-mono.wav）");
+
+const recordingPath = path.join(__dirname, "..", "docs", "evidence", "2026-11-18-mic-recording-48k-mono.wav");
+if (fs.existsSync(recordingPath)) {
+  test("真实人声录音里没有倍数误锁帧", () => {
+    // 与 tools/analyze-audio.js 使用同一套统计，避免两份实现漂移
+    const harness = require("../tools/analyze-audio.js");
+    const result = harness.analyze(recordingPath, {
+      core: path.join(__dirname, "..", "app", "js", "pitch-core.js"),
+      minFreq: 60,
+      maxFreq: 1250
+    });
+    const stats = harness.summarize(result.PC, result.frames, { minFreq: 60, maxFreq: 1250 });
+    const locks = stats.spikes.filter((s) => s.kind === "multiple");
+    assert(locks.length === 0,
+      "仍有倍数误锁帧：" + locks.map((s) => `t=${s.t.toFixed(3)}(Δ${s.delta.toFixed(1)})`).join(", "));
+    assert(stats.validRatio > 0.45, `有效率过低：${(stats.validRatio * 100).toFixed(1)}%`);
+    assert(stats.floorFrames === 0, `出现搜索下限读数 ${stats.floorFrames} 帧`);
+  });
+} else {
+  console.log("  SKIP  现场录音 WAV 不存在（先按 docs/ISSUE_OCTAVE_JUMP.md §9.3 转码）");
 }
 
 /* ================= 汇总 ================= */
