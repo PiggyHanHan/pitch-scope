@@ -86,7 +86,7 @@
     source: null,
     node: null,
     sink: null,
-    smoother: new PC.PitchSmoother(SMOOTH_PRESETS.light),
+    tracker: null,
     history: [],
     current: null,
     status: "idle",
@@ -451,6 +451,35 @@
 
   /* ============================ 检测结果状态机 ============================ */
 
+  /** 依据当前设置重建逐帧状态机（音域 / A4 / 门限 / 置信度 / 平滑档）。 */
+  function createTracker() {
+    return PC.createTracker({
+      a4: settings.a4,
+      minMidi: settings.minMidi,
+      maxMidi: settings.maxMidi,
+      gateDb: settings.gateDb,
+      confidence: settings.confidence,
+      smoothing: SMOOTH_PRESETS[settings.smoothing] || SMOOTH_PRESETS.light
+    });
+  }
+
+  /** 设置变化时热更新状态机，避免切换音域后仍按旧范围判定。 */
+  function applyTrackerSettings(reset) {
+    if (!state.tracker) {
+      state.tracker = createTracker();
+      return;
+    }
+    state.tracker.configure({
+      a4: settings.a4,
+      minMidi: settings.minMidi,
+      maxMidi: settings.maxMidi,
+      gateDb: settings.gateDb,
+      confidence: settings.confidence,
+      smoothing: SMOOTH_PRESETS[settings.smoothing] || SMOOTH_PRESETS.light
+    });
+    if (reset) state.tracker.reset();
+  }
+
   function handlePitch(msg) {
     state.lastMsgAt = performance.now();
     state.audioT = msg.tEnd;
@@ -475,59 +504,18 @@
 
     if (!state.running) return;
 
-    var gateAper = 1 - settings.confidence;
-    var status;
+    // 判定、平滑、读数保持都在 PitchCore.PitchTracker 里（纯计算，可 Node 回归）。
+    if (!state.tracker) state.tracker = createTracker();
+    var result = state.tracker.track(msg);
 
-    if (msg.clipRatio > 0.05) {
-      status = "overload";
-    } else if (msg.db < settings.gateDb) {
-      status = "no-signal";
-    } else if (!(msg.rawF0 > 0) || msg.aperiodicity > gateAper) {
-      status = "low-confidence";
-    } else {
-      var midiFloat = PC.freqToMidi(msg.rawF0, settings.a4);
-      if (midiFloat < settings.minMidi - 0.35 || midiFloat > settings.maxMidi + 0.35) {
-        status = "out-of-range";
-      } else {
-        status = "detecting";
-      }
-    }
-
-    if (status !== "detecting") {
-      state.smoother.reset();
+    if (result.status !== "detecting" || !result.current) {
       state.current = null;
-      setStatus(status);
+      setStatus(result.status);
       return;
     }
 
-    var smoothF0 = state.smoother.push(msg.f0, msg.t * 1000);
-    if (!smoothF0) {
-      state.current = null;
-      setStatus("low-confidence");
-      return;
-    }
-
-    var note = PC.freqToNote(smoothF0, settings.a4);
-    if (note.midiFloat < settings.minMidi - 0.5 || note.midiFloat > settings.maxMidi + 0.5) {
-      state.current = null;
-      setStatus("out-of-range");
-      return;
-    }
-
-    state.current = {
-      f0: smoothF0,
-      rawF0: msg.f0,
-      t: msg.t,
-      midiFloat: note.midiFloat,
-      note: note.note,
-      octave: note.octave,
-      label: note.label,
-      cents: note.cents,
-      targetFreq: note.targetFreq,
-      confidence: msg.confidence
-    };
-
-    state.history.push({ t: msg.t, midi: note.midiFloat });
+    state.current = result.current;
+    if (result.point) state.history.push(result.point);
     setStatus("detecting");
   }
 
@@ -731,7 +719,7 @@
       state.peakDb = -90;
       state.clipRatio = 0;
       state.lastMsgAt = performance.now();
-      state.smoother = new PC.PitchSmoother(SMOOTH_PRESETS[settings.smoothing] || SMOOTH_PRESETS.light);
+      state.tracker = createTracker();
 
       var system = settings.sourceMode === "system";
       stream.getAudioTracks().forEach(function (track) {
@@ -802,7 +790,7 @@
     state.starting = false;
     teardown();
     state.current = null;
-    state.smoother.reset();
+    if (state.tracker) state.tracker.reset();
     state.levelDb = -90;
     state.peakDb = -90;
     state.clipRatio = 0;
@@ -956,7 +944,7 @@
   function resetSignalState() {
     state.history = [];
     state.current = null;
-    state.smoother.reset();
+    applyTrackerSettings(true);
     updateNoteSub();
     updateChartEmpty();
     renderReadout();
@@ -1337,7 +1325,7 @@
 
     if (performance.now() - state.lastMsgAt > 1500) {
       state.current = null;
-      state.smoother.reset();
+      if (state.tracker) state.tracker.reset();
       setStatus("stalled");
     }
     updateLatencyLabel();
@@ -1398,6 +1386,7 @@
       settings.gateDb = Number(els.inputGate.value);
       els.gateValue.textContent = "−" + Math.abs(settings.gateDb) + " dB";
       saveSettings();
+      applyTrackerSettings(false);
       renderLevel();
     });
 
@@ -1405,13 +1394,13 @@
       settings.confidence = Number(els.inputConfidence.value) / 100;
       els.confidenceValue.textContent = Math.round(settings.confidence * 100) + "%";
       saveSettings();
-      state.smoother.reset();
+      applyTrackerSettings(true);
     });
 
     els.selectSmoothing.addEventListener("change", function () {
       settings.smoothing = els.selectSmoothing.value;
       saveSettings();
-      state.smoother = new PC.PitchSmoother(SMOOTH_PRESETS[settings.smoothing] || SMOOTH_PRESETS.light);
+      applyTrackerSettings(true);
     });
 
     els.selectWindow.addEventListener("change", function () {
