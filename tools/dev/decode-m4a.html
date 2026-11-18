@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>解码现场录音为 48k 单声道 WAV</title>
+</head>
+<body>
+<pre id="log">loading…</pre>
+<script>
+  var SOURCE = "/docs/evidence/2026-11-18-mic-recording.m4a";
+  var TARGET = "docs/evidence/2026-11-18-mic-recording-48k-mono.wav";
+
+  function log(text) {
+    document.getElementById("log").textContent += "\n" + text;
+    if (window.console) console.log("[decode]", text);
+  }
+
+  function wavHeader(byteLength, sampleRate) {
+    var header = new ArrayBuffer(44);
+    var v = new DataView(header);
+    function write(offset, ascii) {
+      for (var i = 0; i < ascii.length; i++) v.setUint8(offset + i, ascii.charCodeAt(i));
+    }
+    write(0, "RIFF"); v.setUint32(4, 36 + byteLength, true); write(8, "WAVE");
+    write(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    write(36, "data"); v.setUint32(40, byteLength, true);
+    return new Uint8Array(header);
+  }
+
+  (async function () {
+    try {
+      var res = await fetch(SOURCE);
+      if (!res.ok) throw new Error("fetch " + res.status);
+      var buffer = await res.arrayBuffer();
+      log("fetched " + buffer.byteLength + " bytes");
+
+      var ctx = new OfflineAudioContext(1, 1, 48000);
+      var audio = await ctx.decodeAudioData(buffer);
+      log("decoded sampleRate=" + audio.sampleRate + " channels=" + audio.numberOfChannels +
+        " seconds=" + audio.duration.toFixed(3));
+
+      var len = audio.length;
+      var pcm = new Float32Array(len);
+      for (var c = 0; c < audio.numberOfChannels; c++) {
+        var data = audio.getChannelData(c);
+        for (var i = 0; i < len; i++) pcm[i] += data[i] / audio.numberOfChannels;
+      }
+
+      var pcm16 = new Int16Array(len);
+      for (i = 0; i < len; i++) {
+        var v = Math.max(-1, Math.min(1, pcm[i]));
+        pcm16[i] = Math.round(v * 32767);
+      }
+
+      var bytes = new Uint8Array(44 + pcm16.byteLength);
+      bytes.set(wavHeader(pcm16.byteLength, 48000), 0);
+      bytes.set(new Uint8Array(pcm16.buffer), 44);
+
+      var saved = await fetch("/__save?path=" + encodeURIComponent(TARGET), {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: bytes
+      });
+      log("saved " + TARGET + " status=" + saved.status + " (" + bytes.byteLength + " bytes)");
+      log("DONE");
+      document.title = "DONE";
+    } catch (err) {
+      log("ERROR " + (err && err.message ? err.message : err));
+      document.title = "ERROR";
+    }
+  })();
+</script>
+</body>
+</html>

@@ -29,3 +29,6 @@ Thumbs.db
 desktop/dist/
 desktop/out/
 desktop/release/
+
+# 本地验证的中间产物（音频、浏览器日志、基线副本）
+.tmp/
