@@ -400,3 +400,17 @@ f_target  = A4 * 2^((midi - 69) / 12)
 | 不以全频段频谱为核心 | 主界面只有音高曲线；频谱未实现 | 界面截图 |
 
 更细的测试记录见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)。后续 Windows 客户端与 Android 的分阶段计划、开源项目调研见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
+
+---
+
+## 14. 版本管理
+
+项目已初始化为 Git 仓库，主分支 `main`。首个提交包含浏览器版、测试、文档和路线图；`app/_shots/`、`__pycache__/`、日志与桌面构建产物已加入 `.gitignore`，不会误提交。
+
+```powershell
+cd E:\Projects\vocal-note-pitch-tester-ws
+git status
+git log --oneline --decorate
+```
+
+测试音 WAV 已随仓库提交，克隆后无需先生成即可跑 `node tests\pitch-core.test.js` 和浏览器冒烟。若修改了测试音生成逻辑，再运行 `python tools\make_test_tones.py` 重新生成。
